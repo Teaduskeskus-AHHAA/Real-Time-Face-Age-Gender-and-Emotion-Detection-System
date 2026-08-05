@@ -1,4 +1,14 @@
-opencv-python
-opencv-contrib-python
-tensorflow
-numpy
+opencv-python==4.10.0.84
+opencv-contrib-python==4.10.0.84
+numpy>=1.23,<2.0
+tensorflow>=2.13,<2.16
+onnxruntime>=1.16
+pillow>=10.0
+torch>=2.2
+torchvision>=0.17
+transformers==4.51.0
+accelerate>=0.30
+timm>=0.9
+setuptools>=68,<81
+# MiVOLO package (required by iitolstykh/mivolo_v2 trust_remote_code)
+mivolo @ git+https://github.com/WildChlamydia/MiVOLO.git

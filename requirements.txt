@@ -1,14 +1,18 @@
+# Wheel-only friendly pins for Windows (Python 3.10 / 3.11, 64-bit).
+# No git installs — MiVOLO Python package is vendored in ./mivolo/
+
 opencv-python==4.10.0.84
 opencv-contrib-python==4.10.0.84
-numpy>=1.23,<2.0
-tensorflow>=2.13,<2.16
-onnxruntime>=1.16
-pillow>=10.0
-torch>=2.2
-torchvision>=0.17
+numpy==1.26.4
+scipy==1.11.4
+pillow==10.4.0
+tensorflow==2.15.1
+onnxruntime==1.17.3
+torch==2.2.2
+torchvision==0.17.2
 transformers==4.51.0
-accelerate>=0.30
-timm>=0.9
+accelerate==0.33.0
+timm==0.8.13.dev0
+huggingface_hub>=0.23
 setuptools>=68,<81
-# MiVOLO package (required by iitolstykh/mivolo_v2 trust_remote_code)
-mivolo @ git+https://github.com/WildChlamydia/MiVOLO.git
+wheel>=0.40

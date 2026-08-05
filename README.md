@@ -4,112 +4,96 @@ Webcam app that detects faces in real time and overlays **age**, **gender**, and
 
 | Stage | Model |
 |---|---|
-| Face detection | OpenCV **YuNet** (`face_detection_yunet_2023mar.onnx`) |
+| Face detection | OpenCV **YuNet** (`data/face_detection_yunet_2023mar.onnx`) |
 | Age + gender | **MiVOLO v2** ([`iitolstykh/mivolo_v2`](https://huggingface.co/iitolstykh/mivolo_v2)) |
 | Emotion | Keras model in `data/emotion_model.hdf5` |
 
-## Quick start (clone → run)
+## Quick start — Windows (Desktop)
+
+1. Install **Python 3.11 64-bit** from [python.org](https://www.python.org/downloads/)  
+   - Enable **Add python.exe to PATH**
+2. Clone this repo to your Desktop (full folder).
+3. Double-click **`run.bat`**
+
+The bat file will create `venv`, install **prebuilt wheels only** (no Visual Studio), download YuNet if needed, and start the app.
+
+```bat
+cd %USERPROFILE%\Desktop\Real-Time-Face-Age-Gender-and-Emotion-Detection-System
+run.bat
+```
+
+Debug crops:
+
+```bat
+run.bat --debug
+```
+
+Press **`q`** in the video window to quit.
+
+If install was half-broken before: delete the `venv` folder, then run `run.bat` again.
+
+## Quick start — macOS / Linux
 
 ```bash
 git clone <your-repo-url>
 cd Real-Time-Face-Age-Gender-and-Emotion-Detection-System
 
 python3 -m venv venv
-source venv/bin/activate          # Windows: venv\Scripts\activate
+source venv/bin/activate
 
-# Pin OpenCV first (both packages at the same version)
+pip install -U pip wheel
+pip install "setuptools>=68,<81"
 pip install opencv-python==4.10.0.84
 pip install opencv-contrib-python==4.10.0.84
-
-# Remaining deps (includes MiVOLO from GitHub)
 pip install -r requirements.txt
 
-# Local face model (YuNet). Safe to re-run.
 python scripts/download_models.py
-
 python main.py
 ```
 
-Press **`q`** in the video window to quit.
+## Important Windows notes
 
-Debug crops (what age/gender and emotion nets see):
-
-```bash
-python main.py --debug
-```
-
-### First run notes
-
-- **MiVOLO v2** weights download from Hugging Face the first time you start the app (needs network).
-- If `pip install -r requirements.txt` fails on the `mivolo` git line, install it explicitly:
-
-```bash
-pip install 'setuptools>=68,<81'
-pip install --no-build-isolation "git+https://github.com/WildChlamydia/MiVOLO.git"
-```
-
-- Installing **both** `opencv-python` and `opencv-contrib-python` can confuse `cv2` if versions differ. Keep them on **`4.10.0.84`**. If imports break, uninstall both and reinstall in that order again.
-
-## Requirements
-
-- Python **3.10 or 3.11** recommended (TensorFlow + torch)
-- Webcam
-- Network on first run (Hugging Face model pull)
-
-Pinned / important packages (see `requirements.txt`):
-
-- `opencv-python==4.10.0.84`
-- `opencv-contrib-python==4.10.0.84`
-- `transformers==4.51.0`
-- `setuptools>=68,<81` (needed to build MiVOLO)
-- `mivolo` from `git+https://github.com/WildChlamydia/MiVOLO.git`
+- Use **Python 3.10 or 3.11 only**. 3.12/3.13 often lack matching TensorFlow/numpy wheels and pip tries to compile (needs VS — we avoid that).
+- `run.bat` installs packages with `--only-binary` where possible so **Visual Studio Build Tools are not required**.
+- OpenCV is pinned to **`4.10.0.84`** for both `opencv-python` and `opencv-contrib-python`.
+- The **`mivolo/`** folder is **vendored in this repo** (not a git submodule). Do not add a nested clone under `third_party/`.
+- MiVOLO **weights** still download from Hugging Face on first `python main.py` (needs network once).
 
 ## Project layout
 
 ```
+run.bat                      # Windows one-click setup + launch
 main.py                      # Entry point (--debug optional)
-requirements.txt
+requirements.txt             # Pinned deps (wheels; no git installs)
+mivolo/                      # Vendored MiVOLO Python package
 scripts/download_models.py   # Downloads YuNet into data/
 data/
-  face_detection_yunet_2023mar.onnx   # Face detector (tracked / downloadable)
-  emotion_model.hdf5                  # Emotion classifier (tracked)
+  face_detection_yunet_2023mar.onnx
+  emotion_model.hdf5
 src/
-  detect_faces.py            # YuNet + multi-face tracking
-  age_gender_detection.py    # MiVOLO v2 age/gender
-  emotion_detection.py       # Emotion probabilities
-  real_time_detector.py      # Webcam loop + overlays
-  utils.py                   # Modern on-screen UI
+  detect_faces.py
+  age_gender_detection.py
+  emotion_detection.py
+  real_time_detector.py
+  utils.py
 ```
-
-Large / obsolete weights (`*.caffemodel`, extra `*.onnx` experiments) are **gitignored** and not required.
-
-## How it works
-
-1. Capture frames from camera `0`.
-2. YuNet finds faces and keeps stable track IDs across frames.
-3. For each live face:
-   - MiVOLO estimates **age** (years) and **gender** from a face crop plus an approximate upper-body crop.
-   - The emotion network returns scores for Angry, Disgust, Fear, Happy, Sad, Surprise, Neutral.
-4. A panel is drawn per face (age, gender, fixed-order emotion bars).
-5. Exit with `q`.
-
-Processing stays on-device in memory for display; the stock app does not save or upload frames. The first MiVOLO load does download weights from Hugging Face.
 
 ## Troubleshooting
 
 | Issue | Fix |
 |---|---|
-| `FaceDetectorYN` / OpenCV DNN errors | Reinstall OpenCV 4.10.0.84 (both wheels, same version) |
-| `No module named mivolo` | `pip install --no-build-isolation "git+https://github.com/WildChlamydia/MiVOLO.git"` with `setuptools<81` |
-| `pkg_resources` / MiVOLO build fails | `pip install 'setuptools>=68,<81'` then retry MiVOLO install |
-| Missing YuNet file | `python scripts/download_models.py` |
-| Slow first launch | Normal while Hugging Face caches MiVOLO |
-| Camera not opening | Close other apps using the webcam; try another index in `VideoCapture` if needed |
+| `pip install -r requirements` fails | Delete `venv`, use Python **3.11 64-bit**, run `run.bat`. It installs packages one-by-one as wheels — no Visual Studio, no `git+` MiVOLO install. |
+| `numpy` build / Visual Studio errors | Same fix: Python 3.11 + delete `venv` + `run.bat`. |
+| `No module named mivolo` | Ensure the `mivolo/` folder exists in the repo root (re-clone if missing). |
+| OpenCV / `FaceDetectorYN` errors | Same OpenCV version for both packages: `4.10.0.84`. Re-run `run.bat` after deleting `venv`. |
+| Missing YuNet | `python scripts\download_models.py` |
+| Slow first launch | Hugging Face download of MiVOLO weights |
+| Camera not opening | Close other webcam apps |
 
 ## Privacy
 
-Use only with consent. Predictions (especially binary gender and age) are approximate model outputs, not ground truth.
+Use only with consent. Age/gender/emotion outputs are approximate model predictions.
 
 ## License
 
-See [LICENSE](LICENSE). Third-party models (YuNet, MiVOLO, emotion weights) have their own licenses—respect those when redistributing weights.
+See [LICENSE](LICENSE). Third-party models (YuNet, MiVOLO, emotion weights) and the vendored `mivolo` package have their own licenses.

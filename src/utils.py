@@ -29,15 +29,16 @@ def load_haar_cascade(cascade_path):
 
 
 def _blend_rect(frame, x1, y1, x2, y2, color, alpha):
-    """Draw a filled rectangle with alpha blending."""
+    """Draw a filled rectangle with alpha blending (ROI only — cheap at FHD)."""
     h, w = frame.shape[:2]
     x1, y1 = max(0, x1), max(0, y1)
     x2, y2 = min(w, x2), min(h, y2)
     if x2 <= x1 or y2 <= y1:
         return
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
-    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+    roi = frame[y1:y2, x1:x2]
+    overlay = np.empty_like(roi)
+    overlay[:] = color
+    cv2.addWeighted(overlay, alpha, roi, 1 - alpha, 0, roi)
 
 
 def _draw_corner_brackets(frame, x, y, w, h, color, thickness=2, length=18):

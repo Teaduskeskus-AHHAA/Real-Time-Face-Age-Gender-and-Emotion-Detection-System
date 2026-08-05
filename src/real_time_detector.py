@@ -18,9 +18,11 @@ class RealTimeDetector:
         self.age_gender_detector = AgeGenderDetector(age_gender_model_path)
         self.emotion_detector = EmotionDetector(emotion_model_path)
         self.debug = debug
-        self._infer_every = 5  # MiVOLO is heavier; refresh a bit less often
+        self._infer_every = 8  # MiVOLO is heavy; refresh less often for FHD smoothness
+        self._detect_every = 2  # track holds between YuNet passes
         self._frame_i = 0
         self._debug_tile = 160
+        self._last_tracks = []
 
     def _update_age_gender(self, track, frame, other_boxes):
         box = track.get("raw_box") or track["box"]
@@ -135,7 +137,7 @@ class RealTimeDetector:
         cv2.imshow("Detector Inputs (debug)", mosaic)
 
     def _open_camera(self, min_width=1920, min_height=1080):
-        """Open webcam at least at Full HD when the device supports it."""
+        """Open webcam at Full HD when the device supports it."""
         cap = cv2.VideoCapture(0)
         if not cap.isOpened():
             raise RuntimeError("Could not open camera 0")
@@ -144,10 +146,13 @@ class RealTimeDetector:
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(min_width))
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(min_height))
-        # Prefer a snappy stream if the camera allows it
         cap.set(cv2.CAP_PROP_FPS, 30)
+        # Drop buffered frames so we show the latest, not a lagging queue
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
 
-        # Warm up and read actual negotiated size
         ok, frame = cap.read()
         if not ok or frame is None:
             cap.release()
@@ -159,19 +164,9 @@ class RealTimeDetector:
         if width < min_width or height < min_height:
             print(
                 f"Warning: camera negotiated below FHD ({width}x{height}). "
-                "Frames will be upscaled to at least 1920x1080 for display."
+                "Fullscreen will stretch the native stream (no CPU upscale)."
             )
         return cap
-
-    def _ensure_fhd(self, frame, min_width=1920, min_height=1080):
-        """Upscale frames that come in below Full HD."""
-        h, w = frame.shape[:2]
-        if w >= min_width and h >= min_height:
-            return frame
-        scale = max(min_width / float(w), min_height / float(h))
-        new_w = int(round(w * scale))
-        new_h = int(round(h * scale))
-        return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
 
     def _screen_size(self):
         """Best-effort primary display size for fullscreen setup."""
@@ -209,7 +204,6 @@ class RealTimeDetector:
         if not ret:
             cap.release()
             raise RuntimeError("Camera failed on startup frame")
-        first = self._ensure_fhd(first, min_width=1920, min_height=1080)
         self._enter_fullscreen(window_name, first)
 
         try:
@@ -218,14 +212,18 @@ class RealTimeDetector:
                 if not ret:
                     break
 
-                frame = self._ensure_fhd(frame, min_width=1920, min_height=1080)
-
                 self._frame_i += 1
                 # Re-assert fullscreen for the first frames (some backends ignore the first call)
                 if self._frame_i <= 5:
                     cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
-                tracks = self.face_detector.detect_faces(frame)
+                # Detect on a downscaled copy (inside FaceDetector); skip some frames
+                if self._frame_i % self._detect_every == 1 or not self._last_tracks:
+                    tracks = self.face_detector.detect_faces(frame)
+                    self._last_tracks = tracks
+                else:
+                    tracks = self._last_tracks
+
                 occupied = []
                 all_boxes = [t.get("raw_box") or t["box"] for t in tracks]
 

@@ -11,12 +11,21 @@ class AgeGenderDetector:
     """
 
     def __init__(self, model_path="iitolstykh/mivolo_v2"):
-        self.device = torch.device("cpu")
+        if torch.backends.mps.is_available():
+            self.device = torch.device("mps")
+        elif torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        else:
+            self.device = torch.device("cpu")
+        print(f"Age/gender device: {self.device}")
+
         self.config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        # float16 helps CUDA; keep float32 on MPS/CPU for stability with custom MiVOLO code
+        dtype = torch.float16 if self.device.type == "cuda" else torch.float32
         self.model = AutoModelForImageClassification.from_pretrained(
             model_path,
             trust_remote_code=True,
-            torch_dtype=torch.float32,
+            torch_dtype=dtype,
         ).to(self.device)
         self.model.eval()
         self.processor = AutoImageProcessor.from_pretrained(model_path, trust_remote_code=True)

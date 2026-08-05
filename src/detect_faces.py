@@ -19,10 +19,19 @@ class FaceDetector:
     Also keeps raw boxes + 5-point landmarks for age/gender alignment.
     """
 
-    def __init__(self, model_path, score_threshold=0.7, nms_threshold=0.3, hold_frames=8):
+    def __init__(
+        self,
+        model_path,
+        score_threshold=0.7,
+        nms_threshold=0.3,
+        hold_frames=8,
+        detect_width=640,
+    ):
         self.score_threshold = score_threshold
         self.nms_threshold = nms_threshold
         self.hold_frames = hold_frames
+        # Run YuNet on a downscaled frame — FHD input is far too slow on CPU
+        self.detect_width = int(detect_width)
         self._detector = cv2.FaceDetectorYN.create(
             model_path,
             "",
@@ -37,8 +46,20 @@ class FaceDetector:
     def detect_faces(self, frame):
         """Return track dicts: id, box, raw_box, landmarks, misses, visible, ..."""
         h, w = frame.shape[:2]
-        self._detector.setInputSize((w, h))
-        _, faces = self._detector.detect(frame)
+        scale = 1.0
+        detect = frame
+        if w > self.detect_width:
+            scale = self.detect_width / float(w)
+            detect = cv2.resize(
+                frame,
+                (self.detect_width, max(1, int(round(h * scale)))),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        dh, dw = detect.shape[:2]
+        self._detector.setInputSize((dw, dh))
+        _, faces = self._detector.detect(detect)
+        inv = 1.0 / scale
 
         detections = []
         if faces is not None:
@@ -47,7 +68,12 @@ class FaceDetector:
                 if score < self.score_threshold:
                     continue
 
-                x, y, fw, fh = face[:4].astype(int)
+                x, y, fw, fh = face[:4].astype(np.float32)
+                # Map boxes/landmarks back to full-resolution frame
+                x = int(round(x * inv))
+                y = int(round(y * inv))
+                fw = int(round(fw * inv))
+                fh = int(round(fh * inv))
                 x = max(0, x)
                 y = max(0, y)
                 fw = max(1, min(fw, w - x))
@@ -59,7 +85,7 @@ class FaceDetector:
                     continue
 
                 # YuNet: right eye, left eye, nose, right mouth, left mouth
-                landmarks = face[4:14].reshape(5, 2).astype(np.float32)
+                landmarks = face[4:14].reshape(5, 2).astype(np.float32) * inv
                 detections.append({
                     "box": (x, y, fw, fh),
                     "landmarks": landmarks,

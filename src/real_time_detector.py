@@ -134,50 +134,140 @@ class RealTimeDetector:
         mosaic = np.vstack(row_imgs)
         cv2.imshow("Detector Inputs (debug)", mosaic)
 
-    def run(self):
+    def _open_camera(self, min_width=1920, min_height=1080):
+        """Open webcam at least at Full HD when the device supports it."""
         cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            raise RuntimeError("Could not open camera 0")
 
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
+        # MJPG often unlocks higher resolutions on USB webcams
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(min_width))
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(min_height))
+        # Prefer a snappy stream if the camera allows it
+        cap.set(cv2.CAP_PROP_FPS, 30)
 
-            self._frame_i += 1
-            tracks = self.face_detector.detect_faces(frame)
-            occupied = []
-            all_boxes = [t.get("raw_box") or t["box"] for t in tracks]
+        # Warm up and read actual negotiated size
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            cap.release()
+            raise RuntimeError("Camera opened but failed to read frames")
 
-            for track in tracks:
-                should_infer = track["visible"] and (
-                    track["age"] is None
-                    or self._frame_i % self._infer_every == track["id"] % self._infer_every
-                )
-                if should_infer:
-                    my_box = track.get("raw_box") or track["box"]
-                    other_boxes = [b for b in all_boxes if b is not my_box]
-                    self._update_age_gender(track, frame, other_boxes)
-                    self._update_emotion(track, frame)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print(f"Camera mode: {width}x{height}")
+        if width < min_width or height < min_height:
+            print(
+                f"Warning: camera negotiated below FHD ({width}x{height}). "
+                "Frames will be upscaled to at least 1920x1080 for display."
+            )
+        return cap
 
-                if track["age"] is None or track["emotion_scores"] is None:
-                    continue
+    def _ensure_fhd(self, frame, min_width=1920, min_height=1080):
+        """Upscale frames that come in below Full HD."""
+        h, w = frame.shape[:2]
+        if w >= min_width and h >= min_height:
+            return frame
+        scale = max(min_width / float(w), min_height / float(h))
+        new_w = int(round(w * scale))
+        new_h = int(round(h * scale))
+        return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
 
-                x, y, w, h = track["box"]
-                occupied = draw_face_overlay(
-                    frame,
-                    x, y, w, h,
-                    track["gender"],
-                    track["age"],
-                    track["emotion"],
-                    track["emotion_scores"],
-                    occupied,
-                )
+    def _screen_size(self):
+        """Best-effort primary display size for fullscreen setup."""
+        try:
+            import tkinter as tk
 
-            cv2.imshow('Face, Age, Gender, and Emotion Detection', frame)
-            if self.debug:
-                self._show_debug_inputs(tracks)
+            root = tk.Tk()
+            root.withdraw()
+            w, h = root.winfo_screenwidth(), root.winfo_screenheight()
+            root.destroy()
+            if w > 0 and h > 0:
+                return int(w), int(h)
+        except Exception:
+            pass
+        return 1920, 1080
 
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+    def _enter_fullscreen(self, window_name, frame=None):
+        """Force the OpenCV window into fullscreen (more reliable on Windows)."""
+        screen_w, screen_h = self._screen_size()
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.moveWindow(window_name, 0, 0)
+        cv2.resizeWindow(window_name, screen_w, screen_h)
+        if frame is not None:
+            cv2.imshow(window_name, frame)
+            cv2.waitKey(1)
+        cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        cv2.waitKey(1)
 
-        cap.release()
-        cv2.destroyAllWindows()
+    def run(self):
+        window_name = "Face, Age, Gender, and Emotion Detection"
+        cap = self._open_camera(min_width=1920, min_height=1080)
+
+        # Prime one frame so fullscreen attaches to a real window
+        ret, first = cap.read()
+        if not ret:
+            cap.release()
+            raise RuntimeError("Camera failed on startup frame")
+        first = self._ensure_fhd(first, min_width=1920, min_height=1080)
+        self._enter_fullscreen(window_name, first)
+
+        try:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                frame = self._ensure_fhd(frame, min_width=1920, min_height=1080)
+
+                self._frame_i += 1
+                # Re-assert fullscreen for the first frames (some backends ignore the first call)
+                if self._frame_i <= 5:
+                    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+                tracks = self.face_detector.detect_faces(frame)
+                occupied = []
+                all_boxes = [t.get("raw_box") or t["box"] for t in tracks]
+
+                for track in tracks:
+                    should_infer = track["visible"] and (
+                        track["age"] is None
+                        or self._frame_i % self._infer_every == track["id"] % self._infer_every
+                    )
+                    if should_infer:
+                        my_box = track.get("raw_box") or track["box"]
+                        other_boxes = [b for b in all_boxes if b is not my_box]
+                        self._update_age_gender(track, frame, other_boxes)
+                        self._update_emotion(track, frame)
+
+                    if track["age"] is None or track["emotion_scores"] is None:
+                        continue
+
+                    x, y, w, h = track["box"]
+                    occupied = draw_face_overlay(
+                        frame,
+                        x, y, w, h,
+                        track["gender"],
+                        track["age"],
+                        track["emotion"],
+                        track["emotion_scores"],
+                        occupied,
+                    )
+
+                cv2.imshow(window_name, frame)
+                if self.debug:
+                    self._show_debug_inputs(tracks)
+
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord("q") or key == 27:  # q or Esc
+                    break
+                if key == ord("f"):
+                    fullscreen = cv2.getWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN)
+                    cv2.setWindowProperty(
+                        window_name,
+                        cv2.WND_PROP_FULLSCREEN,
+                        cv2.WINDOW_NORMAL if fullscreen > 0 else cv2.WINDOW_FULLSCREEN,
+                    )
+        finally:
+            cap.release()
+            cv2.destroyAllWindows()

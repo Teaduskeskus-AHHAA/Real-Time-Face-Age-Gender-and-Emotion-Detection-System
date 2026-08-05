@@ -40,7 +40,7 @@ if not exist "mivolo\__init__.py" (
   exit /b 1
 )
 
-%PY% -c "import sys; v=sys.version_info; print('Using Python %d.%d.%d'%v[:3]); raise SystemExit(0 if (v.major==3 and v.minor in (10,11)) else 1)"
+%PY% -c "import sys; v=sys.version_info; print('Using Python %d.%d.%d'%v[:3]'); raise SystemExit(0 if (v.major==3 and v.minor in (10,11)) else 1)"
 if errorlevel 1 (
   echo.
   echo ERROR: Use Python 3.10 or 3.11 64-bit on Windows.

@@ -11,12 +11,7 @@ class AgeGenderDetector:
     """
 
     def __init__(self, model_path="iitolstykh/mivolo_v2"):
-        if torch.backends.mps.is_available():
-            self.device = torch.device("mps")
-        elif torch.cuda.is_available():
-            self.device = torch.device("cuda")
-        else:
-            self.device = torch.device("cpu")
+        self.device = self._pick_device()
         print(f"Age/gender device: {self.device}")
 
         self.config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
@@ -35,6 +30,34 @@ class AgeGenderDetector:
             self.config.gender_id2label[0].capitalize(),
             self.config.gender_id2label[1].capitalize(),
         ]
+
+    @staticmethod
+    def _pick_device():
+        """Prefer NVIDIA CUDA (Quadro/GeForce), then Apple MPS, else CPU."""
+        if torch.cuda.is_available():
+            name = torch.cuda.get_device_name(0)
+            print(f"CUDA available: {name}")
+            return torch.device("cuda")
+
+        # Helpful diagnostics when a GPU is present but this torch build can't use it
+        cuda_built = torch.version.cuda
+        if cuda_built is None:
+            print(
+                "CUDA not available: this PyTorch install is CPU-only. "
+                "Install the CUDA wheel, e.g.\n"
+                "  pip uninstall -y torch torchvision\n"
+                "  pip install torch==2.2.2 torchvision==0.17.2 "
+                "--index-url https://download.pytorch.org/whl/cu121"
+            )
+        else:
+            print(
+                f"CUDA not available (torch built with CUDA {cuda_built}). "
+                "Check NVIDIA drivers / nvidia-smi."
+            )
+
+        if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
 
     def _face_crop(self, frame, box, pad=0.10):
         x, y, w, h = [float(v) for v in box]

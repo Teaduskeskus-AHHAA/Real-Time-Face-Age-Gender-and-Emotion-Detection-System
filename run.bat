@@ -93,7 +93,16 @@ if errorlevel 1 (
   python -m pip install --only-binary=:all: opencv-contrib-python==4.10.0.84
   if errorlevel 1 goto :install_fail
 
-  python -m pip install --only-binary=:all: torch==2.2.2 torchvision==0.17.2
+  REM Torch: CUDA wheel when NVIDIA GPU is present, else CPU
+  where nvidia-smi >nul 2>&1
+  if %ERRORLEVEL%==0 (
+    echo NVIDIA GPU detected — installing PyTorch with CUDA 12.1...
+    python -m pip uninstall -y torch torchvision >nul 2>&1
+    python -m pip install --only-binary=:all: torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cu121
+  ) else (
+    echo No nvidia-smi — installing CPU PyTorch...
+    python -m pip install --only-binary=:all: torch==2.2.2 torchvision==0.17.2
+  )
   if errorlevel 1 goto :install_fail
 
   python -m pip install --only-binary=:all: tensorflow==2.15.1 onnxruntime==1.17.3
@@ -112,6 +121,21 @@ if errorlevel 1 (
 
   echo.
   echo Dependencies installed.
+)
+
+REM Upgrade an existing CPU-only torch if an NVIDIA GPU is available
+where nvidia-smi >nul 2>&1
+if %ERRORLEVEL%==0 (
+  python -c "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)" >nul 2>&1
+  if errorlevel 1 (
+    echo.
+    echo NVIDIA GPU found but PyTorch has no CUDA — upgrading to CUDA 12.1 wheels...
+    python -m pip uninstall -y torch torchvision
+    if errorlevel 1 goto :install_fail
+    python -m pip install --only-binary=:all: torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cu121
+    if errorlevel 1 goto :install_fail
+    python -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda, 'available', torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'still CPU')"
+  )
 )
 
 if exist "scripts\download_models.py" (

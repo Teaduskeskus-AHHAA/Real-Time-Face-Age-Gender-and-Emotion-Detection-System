@@ -55,6 +55,15 @@ python main.py
 
 - Use **Python 3.10 or 3.11 only**. 3.12/3.13 often lack matching TensorFlow/numpy wheels and pip tries to compile (needs VS — we avoid that).
 - `run.bat` installs packages with `--only-binary` where possible so **Visual Studio Build Tools are not required**.
+- **NVIDIA GPU (Quadro / GeForce):** `pip install torch` from PyPI is CPU-only. `run.bat` detects `nvidia-smi` and installs the **CUDA 12.1** PyTorch wheel. If you already have a CPU venv, re-run `run.bat` (it will upgrade torch) or:
+
+```bat
+venv\Scripts\activate
+pip uninstall -y torch torchvision
+pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cu121
+```
+
+You should see `Age/gender device: cuda` and your GPU name at startup.
 - OpenCV is pinned to **`4.10.0.84`** for both `opencv-python` and `opencv-contrib-python`.
 - The **`mivolo/`** folder is **vendored in this repo** (not a git submodule). Do not add a nested clone under `third_party/`.
 - MiVOLO **weights** still download from Hugging Face on first `python main.py` (needs network once).

@@ -1,5 +1,10 @@
 # Wheel-only friendly pins for Windows (Python 3.10 / 3.11, 64-bit).
 # No git installs — MiVOLO Python package is vendored in ./mivolo/
+#
+# IMPORTANT: plain `pip install torch` is CPU-only. For NVIDIA (Quadro/GeForce):
+#   pip uninstall -y torch torchvision
+#   pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cu121
+# Or just use run.bat (auto-detects nvidia-smi and installs the CUDA wheel).
 
 opencv-python==4.10.0.84
 opencv-contrib-python==4.10.0.84
@@ -8,6 +13,7 @@ scipy==1.11.4
 pillow==10.4.0
 tensorflow==2.15.1
 onnxruntime==1.17.3
+# Default pins (CPU wheel from PyPI). run.bat replaces these with cu121 when NVIDIA is present.
 torch==2.2.2
 torchvision==0.17.2
 transformers==4.51.0

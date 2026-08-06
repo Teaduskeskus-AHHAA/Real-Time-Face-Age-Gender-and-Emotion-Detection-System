@@ -21,14 +21,19 @@ class RealTimeDetector:
         self.age_gender_detector = AgeGenderDetector(age_gender_model_path)
         self.emotion_detector = EmotionDetector(emotion_model_path)
         self.debug = debug
-        # Display loop stays light; heavy models run on a worker thread
-        self._infer_every = 10
+        # Heavy MiVOLO stays async; emotion has its own fast worker + display lerp
+        self._age_every = 10
         self._frame_i = 0
         self._debug_tile = 160
         self._infer_q = queue.Queue(maxsize=1)
         self._result_q = queue.Queue()
+        self._emo_lock = threading.Lock()
+        self._emo_pending = {}  # track_id -> BGR face crop (latest only)
+        self._emo_results = {}  # track_id -> score dict
         self._worker_stop = threading.Event()
         self._worker = None
+        self._emo_worker = None
+        self._emotion_labels = None
 
     def _update_age_gender(self, track, frame, other_boxes):
         box = track.get("raw_box") or track["box"]
@@ -66,32 +71,97 @@ class RealTimeDetector:
         track["age_locked"] = None
 
     def _update_emotion(self, track, frame):
-        x, y, w, h = track["box"]
+        """Legacy helper kept for debug path; live path uses the emotion worker."""
+        x, y, w, h = track.get("raw_box") or track["box"]
         fh, fw = frame.shape[:2]
         x1, y1 = max(0, x), max(0, y)
         x2, y2 = min(fw, x + w), min(fh, y + h)
         face = frame[y1:y2, x1:x2]
         if face.size == 0:
             return
-
         result = self.emotion_detector.predict_emotion(face, return_input=self.debug)
         if self.debug:
             emotion, scores, net_input = result
             track["debug_emotion"] = net_input
         else:
             emotion, scores = result
+        track["emotion_scores"] = dict(scores)
+        track["emotion"] = emotion
 
-        if track["emotion_scores"] is None:
-            track["emotion_scores"] = dict(scores)
-        else:
-            track["emotion_scores"] = {
-                k: 0.55 * track["emotion_scores"].get(k, v) + 0.45 * v
-                for k, v in scores.items()
-            }
-        track["emotion"] = max(track["emotion_scores"], key=track["emotion_scores"].get)
+    def _emotion_worker(self):
+        """Always score the newest face crops; drop stale ones so bars stay current."""
+        while not self._worker_stop.is_set():
+            with self._emo_lock:
+                batch = self._emo_pending
+                self._emo_pending = {}
+            if not batch:
+                self._worker_stop.wait(0.005)
+                continue
+            for track_id, face in batch.items():
+                if face is None or face.size == 0:
+                    continue
+                try:
+                    emotion, scores = self.emotion_detector.predict_emotion(face, return_input=False)
+                    with self._emo_lock:
+                        self._emo_results[track_id] = dict(scores)
+                except Exception as exc:
+                    print(f"Emotion worker error: {exc}")
+
+    def _queue_emotion_crops(self, tracks, frame):
+        fh, fw = frame.shape[:2]
+        pending = {}
+        for track in tracks:
+            if not track.get("visible"):
+                continue
+            x, y, w, h = track.get("raw_box") or track["box"]
+            x1, y1 = max(0, x), max(0, y)
+            x2, y2 = min(fw, x + w), min(fh, y + h)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            # Small copy — only the face ROI
+            pending[track["id"]] = np.ascontiguousarray(frame[y1:y2, x1:x2])
+        if pending:
+            with self._emo_lock:
+                self._emo_pending.update(pending)
+
+    def _apply_emotion_results(self, tracks):
+        """Pull newest model scores and ease displayed bars toward them every frame."""
+        with self._emo_lock:
+            results = dict(self._emo_results)
+
+        live_ids = {t["id"] for t in tracks if t.get("visible")}
+        for track in tracks:
+            scores = results.get(track["id"])
+            if scores is not None:
+                track["emotion_target"] = scores
+
+            target = track.get("emotion_target")
+            if target is None:
+                continue
+
+            # Highlight uses latest prediction; bars ease toward it every frame
+            track["emotion"] = max(target, key=target.get)
+            display = track.get("emotion_display")
+            if display is None:
+                display = dict(target)
+            else:
+                display = {
+                    k: display.get(k, v) + 0.55 * (v - display.get(k, v))
+                    for k, v in target.items()
+                }
+            track["emotion_display"] = display
+            track["emotion_scores"] = display
+
+        # Drop results for faces that left the frame
+        stale = [tid for tid in results if tid not in live_ids]
+        if stale:
+            with self._emo_lock:
+                for tid in stale:
+                    self._emo_results.pop(tid, None)
+                    self._emo_pending.pop(tid, None)
 
     def _infer_worker(self):
-        """Run age/gender + emotion off the display thread so the TV feed stays smooth."""
+        """Run age/gender off the display thread so the TV feed stays smooth."""
         while not self._worker_stop.is_set():
             try:
                 job = self._infer_q.get(timeout=0.05)
@@ -101,7 +171,6 @@ class RealTimeDetector:
                 break
 
             track_id, frame, box, other_boxes, want_debug = job
-            # Temporary track shell so existing update helpers can fill fields
             shell = {
                 "id": track_id,
                 "box": box,
@@ -117,18 +186,13 @@ class RealTimeDetector:
             }
             try:
                 self._update_age_gender(shell, frame, other_boxes)
-                self._update_emotion(shell, frame)
                 self._result_q.put({
                     "id": track_id,
                     "gender_hist": shell["gender_hist"],
                     "gender": shell["gender"],
-                    "age_samples": list(shell.get("age_samples") or []),
                     "age_value": shell.get("age_value"),
                     "age": shell.get("age"),
-                    "emotion": shell.get("emotion"),
-                    "emotion_scores": shell.get("emotion_scores"),
                     "debug_age_gender": shell.get("debug_age_gender") if want_debug else None,
-                    "debug_emotion": shell.get("debug_emotion") if want_debug else None,
                 })
             except Exception as exc:
                 print(f"Inference worker error: {exc}")
@@ -145,7 +209,6 @@ class RealTimeDetector:
                 continue
 
             if result.get("gender_hist") is not None and result.get("gender") is not None:
-                # Merge with live history so async results don't thrash labels
                 track["gender_hist"] = 0.5 * track["gender_hist"] + 0.5 * result["gender_hist"]
                 track["gender"] = self.age_gender_detector.gender_labels[
                     int(np.argmax(track["gender_hist"]))
@@ -159,35 +222,21 @@ class RealTimeDetector:
                 track["age_value"] = float(np.median(samples))
                 track["age"] = str(int(round(track["age_value"])))
 
-            if result.get("emotion_scores") is not None:
-                scores = result["emotion_scores"]
-                if track["emotion_scores"] is None:
-                    track["emotion_scores"] = dict(scores)
-                else:
-                    track["emotion_scores"] = {
-                        k: 0.55 * track["emotion_scores"].get(k, v) + 0.45 * v
-                        for k, v in scores.items()
-                    }
-                track["emotion"] = max(track["emotion_scores"], key=track["emotion_scores"].get)
-
             if result.get("debug_age_gender") is not None:
                 track["debug_age_gender"] = result["debug_age_gender"]
-            if result.get("debug_emotion") is not None:
-                track["debug_emotion"] = result["debug_emotion"]
 
-    def _schedule_inference(self, tracks, frame):
-        """Queue at most one face for the worker; drop if busy (keeps display realtime)."""
+    def _schedule_age_gender(self, tracks, frame):
+        """Queue at most one face for MiVOLO; drop if busy (keeps display realtime)."""
         if not self._infer_q.empty():
             return
 
         all_boxes = [t.get("raw_box") or t["box"] for t in tracks]
-        # Prefer faces that still lack labels, then round-robin by frame
         pending = [t for t in tracks if t["visible"] and t.get("age") is None]
         if not pending:
             pending = [
                 t for t in tracks
                 if t["visible"]
-                and self._frame_i % self._infer_every == t["id"] % self._infer_every
+                and self._frame_i % self._age_every == t["id"] % self._age_every
             ]
         if not pending:
             return
@@ -195,12 +244,15 @@ class RealTimeDetector:
         track = pending[0]
         box = track.get("raw_box") or track["box"]
         other_boxes = [b for b in all_boxes if b is not box]
-        # Copy frame so the display thread can keep mutating the live buffer
         job = (track["id"], frame.copy(), box, other_boxes, self.debug)
         try:
             self._infer_q.put_nowait(job)
         except queue.Full:
             pass
+
+    def _update_emotions_live(self, tracks, frame):
+        self._queue_emotion_crops(tracks, frame)
+        self._apply_emotion_results(tracks)
 
     def _label_tile(self, image, lines):
         tile = cv2.resize(image, (self._debug_tile, self._debug_tile), interpolation=cv2.INTER_NEAREST)
@@ -353,6 +405,8 @@ class RealTimeDetector:
         self._worker_stop.clear()
         self._worker = threading.Thread(target=self._infer_worker, name="infer", daemon=True)
         self._worker.start()
+        self._emo_worker = threading.Thread(target=self._emotion_worker, name="emotion", daemon=True)
+        self._emo_worker.start()
 
         try:
             while True:
@@ -368,7 +422,8 @@ class RealTimeDetector:
                 tracks = self.face_detector.detect_faces(frame)
 
                 self._apply_infer_results(tracks)
-                self._schedule_inference(tracks, frame)
+                self._schedule_age_gender(tracks, frame)
+                self._update_emotions_live(tracks, frame)
 
                 occupied = []
                 for track in tracks:
@@ -384,7 +439,7 @@ class RealTimeDetector:
                         track["gender"],
                         track["age"],
                         track["emotion"],
-                        track["emotion_scores"],
+                        track.get("emotion_display") or track["emotion_scores"],
                         occupied,
                     )
 
@@ -410,5 +465,7 @@ class RealTimeDetector:
                 pass
             if self._worker is not None:
                 self._worker.join(timeout=2.0)
+            if self._emo_worker is not None:
+                self._emo_worker.join(timeout=1.0)
             cap.release()
             cv2.destroyAllWindows()

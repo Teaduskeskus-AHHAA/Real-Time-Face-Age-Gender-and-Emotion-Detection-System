@@ -107,6 +107,8 @@ class FaceDetector:
             "age": None,
             "emotion": None,
             "emotion_scores": None,
+            "emotion_display": None,
+            "emotion_target": None,
             "age_hist": np.zeros(8, dtype=np.float64),
             "gender_hist": np.zeros(2, dtype=np.float64),
             "age_value": None,

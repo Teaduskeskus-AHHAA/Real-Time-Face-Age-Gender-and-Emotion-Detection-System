@@ -16,12 +16,12 @@ class AgeGenderDetector:
 
         self.config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         # float16 helps CUDA; keep float32 on MPS/CPU for stability with custom MiVOLO code
-        dtype = torch.float16 if self.device.type == "cuda" else torch.float32
+        self.dtype = torch.float16 if self.device.type == "cuda" else torch.float32
         self.model = AutoModelForImageClassification.from_pretrained(
             model_path,
             trust_remote_code=True,
-            torch_dtype=dtype,
-        ).to(self.device)
+            torch_dtype=self.dtype,
+        ).to(device=self.device, dtype=self.dtype)
         self.model.eval()
         self.processor = AutoImageProcessor.from_pretrained(model_path, trust_remote_code=True)
 
@@ -90,8 +90,13 @@ class AgeGenderDetector:
             empty = (None,) if return_input else ()
             return ("Unknown", "?", None, None) + empty
 
-        faces_input = self.processor(images=[face])["pixel_values"].to(self.device)
-        body_input = self.processor(images=[body])["pixel_values"].to(self.device)
+        # Processor returns float32 on CPU — match model device + dtype (fp16 on CUDA)
+        faces_input = self.processor(images=[face])["pixel_values"].to(
+            device=self.device, dtype=self.dtype
+        )
+        body_input = self.processor(images=[body])["pixel_values"].to(
+            device=self.device, dtype=self.dtype
+        )
 
         output = self.model(faces_input=faces_input, body_input=body_input)
 

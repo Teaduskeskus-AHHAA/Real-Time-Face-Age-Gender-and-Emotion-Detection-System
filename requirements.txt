@@ -16,7 +16,7 @@ onnxruntime==1.17.3
 # Default pins (CPU wheel from PyPI). run.bat replaces these with cu121 when NVIDIA is present.
 torch==2.2.2
 torchvision==0.17.2
-transformers==4.51.0
+transformers==5.5.0
 accelerate==0.33.0
 timm==0.8.13.dev0
 huggingface_hub>=0.23

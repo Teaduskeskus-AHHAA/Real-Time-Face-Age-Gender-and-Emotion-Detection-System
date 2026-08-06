@@ -29,7 +29,10 @@ class EmotionDetector:
         model_input = np.expand_dims(model_input, axis=-1)
         model_input = np.expand_dims(model_input, axis=0)
 
-        raw = self.model.predict(model_input, verbose=0)[0]
+        raw = self.model(model_input, training=False)
+        if hasattr(raw, "numpy"):
+            raw = raw.numpy()
+        raw = np.asarray(raw)[0]
         probs = self._to_probabilities(raw)
         emotion_idx = int(np.argmax(probs))
         scores = {label: float(probs[i]) for i, label in enumerate(self.labels)}

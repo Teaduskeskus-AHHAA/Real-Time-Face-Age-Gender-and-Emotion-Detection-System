@@ -23,10 +23,8 @@ class RealTimeDetector:
         self.debug = debug
         # Display loop stays light; heavy models run on a worker thread
         self._infer_every = 10
-        self._detect_every = 2
         self._frame_i = 0
         self._debug_tile = 160
-        self._last_tracks = []
         self._infer_q = queue.Queue(maxsize=1)
         self._result_q = queue.Queue()
         self._worker_stop = threading.Event()
@@ -366,20 +364,20 @@ class RealTimeDetector:
                 if self._frame_i <= 5:
                     cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
-                if self._frame_i % self._detect_every == 1 or not self._last_tracks:
-                    tracks = self.face_detector.detect_faces(frame)
-                    self._last_tracks = tracks
-                else:
-                    tracks = self._last_tracks
+                # Always detect — skipping frames froze old boxes on screen
+                tracks = self.face_detector.detect_faces(frame)
 
                 self._apply_infer_results(tracks)
                 self._schedule_inference(tracks, frame)
 
                 occupied = []
                 for track in tracks:
+                    # Drop ghosts: only draw faces seen in this frame
+                    if not track.get("visible"):
+                        continue
                     if track["age"] is None or track["emotion_scores"] is None:
                         continue
-                    x, y, w, h = track["box"]
+                    x, y, w, h = track.get("raw_box") or track["box"]
                     occupied = draw_face_overlay(
                         frame,
                         x, y, w, h,

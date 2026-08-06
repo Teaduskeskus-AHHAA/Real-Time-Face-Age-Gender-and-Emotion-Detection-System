@@ -24,11 +24,12 @@ class FaceDetector:
         model_path,
         score_threshold=0.7,
         nms_threshold=0.3,
-        hold_frames=8,
+        hold_frames=2,
         detect_width=640,
     ):
         self.score_threshold = score_threshold
         self.nms_threshold = nms_threshold
+        # Keep ID briefly through a miss, but overlays only draw when visible
         self.hold_frames = hold_frames
         # Run YuNet on a downscaled frame — FHD input is far too slow on CPU
         self.detect_width = int(detect_width)
@@ -133,13 +134,14 @@ class FaceDetector:
                 det = detections[best_i]
                 px, py, pw, ph = track["box"]
                 dx, dy, dw, dh = det["box"]
+                # Light smoothing only — heavy EMA made boxes lag behind motion
                 track["box"] = (
-                    int(0.65 * px + 0.35 * dx),
-                    int(0.65 * py + 0.35 * dy),
-                    int(0.65 * pw + 0.35 * dw),
-                    int(0.65 * ph + 0.35 * dh),
+                    int(0.25 * px + 0.75 * dx),
+                    int(0.25 * py + 0.75 * dy),
+                    int(0.25 * pw + 0.75 * dw),
+                    int(0.25 * ph + 0.75 * dh),
                 )
-                # Keep unsmoothed geometry for model crops
+                # Keep unsmoothed geometry for model crops + snappy overlay
                 track["raw_box"] = det["box"]
                 track["landmarks"] = det["landmarks"]
                 track["misses"] = 0
